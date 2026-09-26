@@ -14,6 +14,7 @@ ICLR 一年才出一次结果，看不到最近半年的变化；arXiv 每天都
   python3 arxiv_momentum.py --direction gnn
   python3 arxiv_momentum.py --direction 大模型Agent --months 18
   python3 arxiv_momentum.py --name "时间序列预测" --phrases "time series forecasting"
+  python3 arxiv_momentum.py --direction gnn --and-phrases "large language model" LLM   # 交叉：GNN × LLM
   python3 arxiv_momentum.py --direction rag --cats cs.CL cs.IR --json
 """
 
@@ -78,13 +79,17 @@ def resolve_direction(query, directions):
     return [d for d in directions if q in norm(d["name"]) or any(q in norm(a) for a in d.get("aliases", []))]
 
 
-def build_query(phrases, cats):
+def _or_group(phrases):
     terms = []
     for p in phrases:
         p = p.replace('"', "").strip()
         if p:
             terms.append('ti:"{0}" OR abs:"{0}"'.format(p))
-    topic = "(" + " OR ".join(terms) + ")" if terms else None
+    return "(" + " OR ".join(terms) + ")" if terms else None
+
+
+def build_query(phrases, cats, and_groups=()):
+    topic = " AND ".join(g for g in [_or_group(phrases)] + [_or_group(x) for x in and_groups] if g) or None
     cat = "(" + " OR ".join("cat:" + c for c in cats) + ")"
     return topic, cat
 
@@ -109,7 +114,7 @@ def last_day(y, m):
 _last_call = [0.0]
 
 
-def fetch_total(search_query, retries=3):
+def fetch_total(search_query, retries=2):
     # max_results=0 会让 arXiv 报 500，所以取 1 条，只读 totalResults
     params = urllib.parse.urlencode({"search_query": search_query, "start": 0, "max_results": 1})
     url = API + "?" + params
@@ -186,7 +191,10 @@ def parse_args(argv=None):
     ap.add_argument("-d", "--direction", help="内置方向 id、中文名或别名")
     ap.add_argument("--name", help="自定义方向的显示名")
     ap.add_argument("--phrases", nargs="+", help="自定义关键词（英文）")
-    ap.add_argument("--cats", nargs="+", default=DEFAULT_CATS, help="arXiv 类目，默认 cs.LG cs.AI cs.CL cs.CV")
+    ap.add_argument("--and-phrases", nargs="+", action="append", default=[], metavar="PHRASE",
+                    help="再加一组必须同时命中的关键词（可重复），用于交叉方向")
+    ap.add_argument("--cats", nargs="+", default=DEFAULT_CATS,
+                    help="arXiv 类目，默认 cs.LG cs.AI cs.CL cs.CV；机器人加 cs.RO，检索加 cs.IR，金融加 q-fin.CP q-fin.TR 等")
     ap.add_argument("--months", type=int, default=12, help="统计最近几个完整月份，默认 12")
     ap.add_argument("--until", help="截止月份 YYYY-MM，默认上个月")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
@@ -204,6 +212,8 @@ def main(argv=None):
             print("❌ 方向「{}」匹配结果：{}。请写得更具体，或用 --phrases 自定义关键词。".format(args.direction, names), file=sys.stderr)
             return 2
         name, phrases = found[0]["name"], found[0]["phrases"]
+    if args.and_phrases:
+        name = args.name or " × ".join([name] + [" / ".join(g) for g in args.and_phrases])
     else:
         print("❌ 请指定 --direction 或 --phrases", file=sys.stderr)
         return 2
@@ -214,7 +224,7 @@ def main(argv=None):
     else:
         y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
     months = month_range((y, m), max(2, args.months))
-    topic, cat = build_query(phrases, args.cats)
+    topic, cat = build_query(phrases, args.cats, args.and_phrases)
     cache = load_cache()
     rows = []
     print("⏳ 正在查询 arXiv（{} 个月 × 2 次请求，每次间隔 {} 秒）…".format(len(months), DELAY), file=sys.stderr, flush=True)
@@ -231,7 +241,8 @@ def main(argv=None):
 
     summary = summarize(rows)
     if args.json:
-        print(json.dumps({"name": name, "phrases": phrases, "cats": args.cats, "rows": rows, "summary": summary},
+        print(json.dumps({"name": name, "phrases": phrases, "and": args.and_phrases, "cats": args.cats,
+                          "rows": rows, "summary": summary},
                          ensure_ascii=False, indent=1))
         return 0
 
@@ -239,8 +250,9 @@ def main(argv=None):
     sgn = lambda x: "—" if x is None else "{:+.0f}%".format(100 * x)
     print("## 📈 arXiv 月度势头：{}".format(name))
     print()
-    print("- 口径：标题或摘要含 {}；类目 {}；按首次提交月份统计".format(
-        " / ".join("`{}`".format(p) for p in phrases), " ∪ ".join(args.cats)))
+    also = "".join("，且同时含 " + " / ".join("`{}`".format(p) for p in g) for g in args.and_phrases)
+    print("- 口径：标题或摘要含 {}{}；类目 {}；按首次提交月份统计".format(
+        " / ".join("`{}`".format(p) for p in phrases), also, " ∪ ".join(args.cats)))
     print("- arXiv 是预印本，只反映热度，看不了录用红利")
     print()
     print("| 月份 | 方向论文数 | 同类目总数 | 份额 |")

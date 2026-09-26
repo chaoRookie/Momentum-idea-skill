@@ -19,6 +19,8 @@ iclr_momentum.py —— 用 ICLR 2017–2026 的录用 / 拒稿记录，算一�
   python3 iclr_momentum.py --direction gnn
   python3 iclr_momentum.py --direction 图神经网络 --samples 8
   python3 iclr_momentum.py --name "时间序列预测" --phrases "time series forecasting" "temporal forecasting"
+  python3 iclr_momentum.py --direction gnn --and-phrases "large language model" LLM   # 交叉：GNN × LLM
+  python3 iclr_momentum.py --phrases financial stock portfolio --and-phrases "LLM agent" agentic
   python3 iclr_momentum.py --all                 # 扫描全部内置方向（找方向模式）
   python3 iclr_momentum.py --all --offline       # 不联网，用预计算快照
   python3 iclr_momentum.py --direction llm --json
@@ -183,42 +185,46 @@ def load_directions():
         return json.load(f)["directions"]
 
 
+def _norm(text):
+    return text.lower().replace(" ", "")
+
+
 def resolve_direction(query, directions):
-    q = query.strip().lower()
-    exact = [d for d in directions if d["id"].lower() == q or d["name"].lower() == q]
+    q = _norm(query)
+    exact = [d for d in directions if _norm(d["id"]) == q or _norm(d["name"]) == q
+             or any(_norm(a) == q for a in d.get("aliases", []))]
     if exact:
         return exact
-    hits = []
-    for d in directions:
-        names = [d["name"].lower()] + [a.lower() for a in d.get("aliases", [])]
-        if any(q == n for n in names):
-            hits.append(d)
-    if hits:
-        return hits
-    return [d for d in directions if q in d["name"].lower() or any(q in a.lower() for a in d.get("aliases", []))]
+    return [d for d in directions if q in _norm(d["name"]) or any(q in _norm(a) for a in d.get("aliases", []))]
 
 
 _SPLIT = re.compile(r"[\s\-_/]+")
 
 
+def _word_pattern(word, last):
+    """含大写字母的单词（LLM、AI、NeRF）按大小写精确匹配，其余单词不区分大小写；最后一个词兼容复数。"""
+    body = re.escape(word) + (r"(?:s|es)?" if last and word[-1].isalpha() else "")
+    return body if any(ch.isupper() for ch in word) else "(?i:" + body + ")"
+
+
 def phrase_to_regex(phrase):
-    """词间空格/连字符等价，末尾兼容复数；含大写字母的词组（LLM、NeRF）按大小写精确匹配。
+    """词间空格/连字符等价，末尾兼容复数；大小写规则见 _word_pattern。
     返回 (预筛用的小写片段, 正则)：先用 in 做廉价的子串预筛，命中了再跑正则。"""
     words = [w for w in _SPLIT.split(phrase.strip()) if w]
     if not words:
         raise ValueError("关键词不能为空")
-    body = r"[\s\-]+".join(re.escape(w) for w in words)
-    if words[-1][-1].isalpha():
-        body += r"(?:s|es)?"
+    body = r"[\s\-]+".join(_word_pattern(w, i == len(words) - 1) for i, w in enumerate(words))
     pattern = r"(?<![A-Za-z0-9])" + body + r"(?![A-Za-z0-9])"
-    flags = 0 if any(ch.isupper() for ch in phrase) else re.IGNORECASE
     needle = max(words, key=len).lower()
-    return needle, re.compile(pattern, flags)
+    return needle, re.compile(pattern)
 
 
 class Matcher:
-    def __init__(self, phrases, exclude=(), regexes=()):
+    """include 里任一命中，且每个 and 组里各有一个命中，且 exclude 一个都不命中。"""
+
+    def __init__(self, phrases, exclude=(), regexes=(), and_groups=()):
         self.include = [phrase_to_regex(p) for p in phrases] + [("", re.compile(r, re.IGNORECASE)) for r in regexes]
+        self.and_groups = [[phrase_to_regex(p) for p in g] for g in and_groups if g]
         self.exclude = [phrase_to_regex(p) for p in exclude]
         if not self.include:
             raise ValueError("至少需要一个关键词")
@@ -229,11 +235,14 @@ class Matcher:
         return any(needle in low and rx.search(text) for needle, rx in rules)
 
     def match(self, paper):
-        return self._hit(self.include, paper) and not self._hit(self.exclude, paper)
+        return (self._hit(self.include, paper)
+                and all(self._hit(g, paper) for g in self.and_groups)
+                and not self._hit(self.exclude, paper))
 
 
 def matcher_for(direction):
-    return Matcher(direction.get("phrases", []), direction.get("exclude", []), direction.get("regex", []))
+    return Matcher(direction.get("phrases", []), direction.get("exclude", []), direction.get("regex", []),
+                   direction.get("and", []))
 
 
 # ----------------------------------------------------------------------------
@@ -286,7 +295,7 @@ def compute_rows(counts, totals, z=Z95):
     return rows
 
 
-def diagnose(rows, window=3, hot_cut=None):
+def diagnose(rows, window=3, hot_cut=None, hot_cut_rel=None):
     by_year = {r["year"]: r for r in rows}
     latest = rows[-1]
     base = by_year.get(latest["year"] - window, rows[0])
@@ -302,6 +311,7 @@ def diagnose(rows, window=3, hot_cut=None):
         "overall_acc_latest": latest["A"] / latest["N"] if latest["N"] else None,
         "small_sample": n1 < 30,
         "hot_cut": hot_cut,
+        "hot_cut_rel": hot_cut_rel,
     }
     sd = latest["share_delta"] or 0.0
     gap, lo, hi = latest["gap"], latest["ci_low"], latest["ci_high"]
@@ -333,6 +343,11 @@ def diagnose(rows, window=3, hot_cut=None):
     if not labels:
         labels.append("steady")
     d["warming"] = warming
+    prev_s = prev["share"] if prev else 0.0
+    d["share_delta_rel"] = (sd / prev_s) if prev_s > 0 else None
+    d["hot_abs"] = bool(hot_cut is not None and sd > 0 and sd >= hot_cut)
+    d["hot_rel"] = bool(hot_cut_rel is not None and d["share_delta_rel"] is not None and sd > 0
+                        and d["share_delta_rel"] >= hot_cut_rel and n1 >= 30)
     labels.sort(key=LABEL_PRIORITY.index)
     d["labels"] = labels
     d["primary_label"] = labels[0]
@@ -352,7 +367,7 @@ def levels(latest, base, d, hot_cut):
         lv["momentum"] = "na"
     elif sd <= -0.005:
         lv["momentum"] = "red"
-    elif sd > 0 and hot_cut is not None and sd >= hot_cut:
+    elif d.get("hot_abs") or d.get("hot_rel"):
         lv["momentum"] = "green"
     else:
         lv["momentum"] = "yellow"
@@ -386,6 +401,22 @@ def levels(latest, base, d, hot_cut):
     else:
         lv["growth"] = "red"
     return lv
+
+
+def phrase_hits(spec, matcher, papers):
+    """每个关键词在给定论文里命中几篇、其中几篇只靠它命中（主关键词组）。"""
+    labels = list(spec.get("phrases", [])) + ["regex:" + r for r in spec.get("regex", [])]
+    rules = matcher.include
+    out = []
+    for i, (label, (needle, rx)) in enumerate(zip(labels, rules)):
+        hit = only = 0
+        for p in papers:
+            if needle in p["low"] and rx.search(p["text"]):
+                hit += 1
+                if not any(n2 in p["low"] and r2.search(p["text"]) for j, (n2, r2) in enumerate(rules) if j != i):
+                    only += 1
+        out.append((label, hit, only))
+    return out
 
 
 def hot_cutoff(share_deltas):
@@ -462,12 +493,13 @@ def render_direction(title, spec, rows, diag, samples, source_note, show_years=N
     out.append("## 📊 ICLR momentum：{}".format(title))
     out.append("")
     out.append("- 口径：{}".format(spec))
-    out.append("- 已决论文 = 录用 + 拒稿（不含撤稿、desk reject）；一篇论文可同时属于多个方向")
+    out.append("- 已决论文 = 录用 + 拒稿（不含撤稿、desk reject，所以这里的录用率会比官方公布的高）；一篇论文可同时属于多个方向")
     out.append("- 数据：{}".format(source_note))
     out.append("")
     out.append("| 年份 | 论文数 | 录用 | 拒稿 | 份额 | 份额年变化 | 录用率 | 其他论文录用率 | 相对录用率差（95% 区间） |")
     out.append("|---|---|---|---|---|---|---|---|---|")
-    for r in rows:
+    first = next((i for i, r in enumerate(rows) if r["n"] > 0), len(rows))
+    for r in rows[max(0, min(first, len(rows) - 4)):]:
         if show_years and r["year"] not in show_years:
             continue
         out.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
@@ -479,8 +511,11 @@ def render_direction(title, spec, rows, diag, samples, source_note, show_years=N
     out.append("### 诊断（{} → {}）".format(y0, y1))
     out.append("- 论文数 {}，大会整体 {}；份额 {} → {}".format(
         ratio(diag["count_ratio"]), ratio(diag["conf_ratio"]), pct(diag["share_base"], 2), pct(diag["share_latest"], 2)))
-    if diag["delta_n"] > 0:
-        out.append("- 新增 {} 篇，其中录用 {:+d} 篇（占新增的 {}）；{} 年大会整体录用率 {}".format(
+    if diag["delta_n"] > 0 and diag["delta_accepted"] > diag["delta_n"]:
+        out.append("- 论文只多了 {} 篇，录用却多了 {} 篇（拒稿减少了 {} 篇）：增长全落在录用里".format(
+            diag["delta_n"], diag["delta_accepted"], diag["delta_accepted"] - diag["delta_n"]))
+    elif diag["delta_n"] > 0:
+        out.append("- 新增 {} 篇，其中录用 {:+d} 篇（占新增的 {}）；{} 年大会整体录用率 {}（已决口径）".format(
             diag["delta_n"], diag["delta_accepted"], pct(diag["growth_to_accept"]), y1, pct(diag["overall_acc_latest"])))
     else:
         out.append("- 论文数变化 {:+d} 篇，录用数变化 {:+d} 篇".format(diag["delta_n"], diag["delta_accepted"]))
@@ -494,17 +529,28 @@ def render_direction(title, spec, rows, diag, samples, source_note, show_years=N
         out.append("- {} 年相对录用率差 {}（{}, {}）→ {}".format(
             y1, pp(latest["gap"]), pp(latest["ci_low"]), pp(latest["ci_high"]), verdict))
     if diag.get("hot_cut") is not None and latest["share_delta"] is not None:
-        is_hot = latest["share_delta"] > 0 and latest["share_delta"] >= diag["hot_cut"]
-        out.append("- 份额年变化 {}（hot 门槛：28 个内置方向里前 25% 为 ≥ {}）→ {}".format(
-            pp(latest["share_delta"], 2), pp(diag["hot_cut"], 2), "属于 hot 组" if is_hot else "不属于 hot 组"))
+        if diag["hot_abs"]:
+            verdict = "属于 hot 组（文章口径）"
+        elif diag["hot_rel"]:
+            verdict = "按相对增幅属于 hot 组（小方向适用）"
+        else:
+            verdict = "不属于 hot 组"
+        rel_txt = ""
+        if diag.get("hot_cut_rel") is not None and diag.get("share_delta_rel") is not None:
+            rel_txt = "；相对增幅 {:+.0f}%（前 25% 门槛 ≥ {:+.0f}%，要求 ≥ 30 篇）".format(
+                100 * diag["share_delta_rel"], 100 * diag["hot_cut_rel"])
+        out.append("- 份额年变化 {}（28 个内置方向里前 25% 的门槛 ≥ {}）{} → {}".format(
+            pp(latest["share_delta"], 2), pp(diag["hot_cut"], 2), rel_txt, verdict))
     out.append("- 处境标签：**{}**{}".format(
         label_text(diag["primary_label"]),
         "（另：{}）".format("、".join(label_text(k) for k in diag["labels"][1:])) if len(diag["labels"]) > 1 else ""))
     out.append("  - {}".format(LABELS[diag["primary_label"]][2]))
     lv = diag["levels"]
     out.append("- 数据等级：" + " ｜ ".join("{} {}{}".format(DIM_NAME[k], LEVEL_EMOJI[lv[k]], LEVEL_NAME[lv[k]]) for k in DIM_NAME))
-    conf = "样本少（最新一年 < 30 篇），结论只能当方向性参考" if diag["small_sample"] else "样本量足够"
-    out.append("- 可信度：{}；以上都是历史关联，不是因果".format(conf))
+    n_latest = rows[-1]["n"]
+    conf = ("样本少（最新一年 {} 篇 < 30），结论只能当方向性参考".format(n_latest) if diag["small_sample"]
+            else "样本量够（最新一年 {} 篇）".format(n_latest))
+    out.append("- 可信度：{}；关键词准不准要看下面的命中样例；以上都是历史关联，不是因果".format(conf))
     if samples:
         out.append("")
         out.append("### 命中样例（{} 年随机抽取，用来检查关键词有没有误伤）".format(y1))
@@ -523,7 +569,9 @@ def render_scan(results, window, m, source_note):
     out.append("## 🔍 ICLR {} 内置方向扫描（{} 个方向）".format(y1, m))
     out.append("")
     out.append("- 数据：{}".format(source_note))
-    out.append("- hot = 当年份额增长最快的前 25%（文章回测口径）；✱ = 做了 {} 个方向的多重比较校正后仍显著".format(m))
+    out.append("- hot = 当年份额增长最快的前 25%（文章回测口径）")
+    out.append("- ✱ = 当年相对录用率差在 {} 个方向的多重比较校正后仍显著不为零（检验的是当年的差距，和文章检验\"下降趋势是否显著\"不是同一个检验）".format(m))
+    out.append("- 录用率按已决论文算（不含撤稿、desk reject），会比官方公布的高")
     out.append("")
     out.append("| 方向 | {} 论文数 | 份额 | 份额年变化 | 相对录用率差（95% 区间） | {}→{} 新增里录用占比 | 处境标签 |".format(y1, y0, y1))
     out.append("|---|---|---|---|---|---|---|")
@@ -556,11 +604,14 @@ def parse_args(argv=None):
     ap.add_argument("-d", "--direction", help="内置方向 id、中文名或别名，如 gnn / 图神经网络")
     ap.add_argument("--name", help="自定义方向的显示名")
     ap.add_argument("--phrases", nargs="+", help="自定义方向的关键词（英文，匹配标题+摘要）")
+    ap.add_argument("--and-phrases", nargs="+", action="append", default=[], metavar="PHRASE",
+                    help="再加一组关键词，必须同时命中（组内任一即可；可重复使用来叠加多组），用于交叉方向")
     ap.add_argument("--exclude", nargs="+", default=[], help="命中这些词就排除")
     ap.add_argument("--regex", nargs="+", default=[], help="高级：额外的正则表达式（不区分大小写）")
     ap.add_argument("--all", action="store_true", help="扫描全部内置方向")
     ap.add_argument("--window", type=int, default=3, help="增长去向的回看年数，默认 3（即 2023→2026）")
     ap.add_argument("--samples", type=int, default=5, help="展示多少篇命中论文样例，默认 5")
+    ap.add_argument("--phrase-hits", action="store_true", help="列出每个关键词在最新一年各命中多少篇，用来删掉误伤多的词")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--offline", action="store_true", help="不联网，用 data/iclr_precomputed.json（仅内置方向）")
     ap.add_argument("--refresh", action="store_true", help="重新下载数据")
@@ -600,6 +651,8 @@ def main(argv=None):
         return 0
 
     custom = bool(args.phrases or args.regex)
+    if args.and_phrases and not (custom or args.direction):
+        fail("--and-phrases 要和 --phrases 或 --direction 一起用（它是\"同时还要命中\"的那一组）")
     if not (args.all or args.direction or custom or args.build_precomputed):
         fail("请指定 --direction、--phrases 或 --all（--list 查看内置方向）")
 
@@ -614,17 +667,26 @@ def main(argv=None):
         if len(found) > 1:
             fail("「{}」匹配到多个方向：{}，请写得更具体".format(args.direction, "、".join(d["id"] for d in found)))
         d = found[0]
-        targets = [(d["id"], d["name"], d)]
+        if args.and_phrases or args.exclude:
+            spec = dict(d)
+            spec["and"] = args.and_phrases
+            spec["exclude"] = d.get("exclude", []) + args.exclude
+            name = args.name or " × ".join([d["name"]] + [" / ".join(g) for g in args.and_phrases])
+            targets = [(d["id"] + "+", name, spec)]
+        else:
+            targets = [(d["id"], d["name"], d)]
     elif custom:
-        name = args.name or args.direction or " / ".join(args.phrases or args.regex)
-        spec = {"id": "custom", "name": name, "phrases": args.phrases or [], "exclude": args.exclude, "regex": args.regex}
+        name = args.name or args.direction or " × ".join(
+            [" / ".join(args.phrases or args.regex)] + [" / ".join(g) for g in args.and_phrases])
+        spec = {"id": "custom", "name": name, "phrases": args.phrases or [], "exclude": args.exclude,
+                "regex": args.regex, "and": args.and_phrases}
         targets = [("custom", name, spec)]
 
     # 取数
-    samples_by_id, counts_by_id = {}, {}
+    samples_by_id, counts_by_id, phrase_hits_by_id = {}, {}, {}
     if args.offline:
-        if custom:
-            fail("自定义方向需要原始数据，离线算不了。请联网运行，或改用网页搜索 + 文章快照。")
+        if custom or args.and_phrases or args.exclude:
+            fail("自定义关键词、交叉方向需要原始数据，离线算不了。请联网运行，或改用网页搜索 + 文章快照。")
         pre, totals, pre_counts = load_precomputed()
         for key, _, _ in targets:
             counts_by_id[key] = pre_counts[key]
@@ -645,10 +707,13 @@ def main(argv=None):
         source_note = "papercopilot/paperlists 的 ICLR 2017–2026 列表（抓取于 {}）".format("、".join(fetched) or "未知")
         rng = random.Random(args.seed)
         for key, _, spec in targets:
-            counts, matched = count_by_year(matcher_for(spec), papers, collect=args.samples > 0)
+            matcher = matcher_for(spec)
+            counts, matched = count_by_year(matcher, papers, collect=args.samples > 0 or args.phrase_hits)
             counts_by_id[key] = counts
             latest = matched.get(max(YEARS), [])
             samples_by_id[key] = rng.sample(latest, min(args.samples, len(latest))) if args.samples > 0 else []
+            if args.phrase_hits and not args.all:
+                phrase_hits_by_id[key] = phrase_hits(spec, matcher, latest)
         hot_deltas_source = None
 
     # hot 门槛：28 个内置方向最新一年份额年变化的前 25%
@@ -660,23 +725,26 @@ def main(argv=None):
                 _, _, hot_deltas_source = load_precomputed()
             except (OSError, ValueError, KeyError):
                 hot_deltas_source = {}
-    deltas = []
+    deltas, rel_deltas = [], []
     for c in hot_deltas_source.values():
         r = compute_rows(c, totals)
         deltas.append(r[-1]["share_delta"])
+        prev_share = r[-2]["share"] if len(r) > 1 else 0.0
+        rel_deltas.append(r[-1]["share_delta"] / prev_share if prev_share > 0 else None)
     cut = hot_cutoff(deltas)
+    cut_rel = hot_cutoff(rel_deltas)
 
     results = []
     for key, name, spec in targets:
         rows = compute_rows(counts_by_id[key], totals)
-        diag = diagnose(rows, window=args.window, hot_cut=cut)
+        diag = diagnose(rows, window=args.window, hot_cut=cut, hot_cut_rel=cut_rel)
         results.append({"id": key, "name": name, "spec": spec, "rows": rows, "diag": diag,
                         "samples": samples_by_id.get(key, [])})
 
     if args.json:
-        payload = {"source": source_note, "window": args.window, "hot_cut": cut, "results": [
+        payload = {"source": source_note, "window": args.window, "hot_cut": cut, "hot_cut_rel": cut_rel, "results": [
             {"id": r["id"], "name": r["name"], "phrases": r["spec"].get("phrases", []),
-             "exclude": r["spec"].get("exclude", []), "rows": r["rows"],
+             "and": r["spec"].get("and", []), "exclude": r["spec"].get("exclude", []), "rows": r["rows"],
              "diagnosis": r["diag"],
              "samples": [{"title": p["t"], "decision": p["d"], "openreview_id": p["i"]} for p in r["samples"]]}
             for r in results]}
@@ -690,9 +758,20 @@ def main(argv=None):
     r = results[0]
     spec = r["spec"]
     words = " / ".join("`{}`".format(p) for p in spec.get("phrases", []) + spec.get("regex", []))
-    spec_text = "标题 + 摘要匹配 {}{}（含大写字母的词按大小写精确匹配，全小写的不区分大小写）".format(
-        words, "；排除 " + " / ".join("`{}`".format(p) for p in spec.get("exclude", [])) if spec.get("exclude") else "")
+    also = "".join("，且同时命中 " + " / ".join("`{}`".format(p) for p in g) for g in spec.get("and", []))
+    excl = "；排除 " + " / ".join("`{}`".format(p) for p in spec.get("exclude", [])) if spec.get("exclude") else ""
+    spec_text = "标题 + 摘要匹配 {}{}{}（含大写字母的单词按大小写精确匹配，其余单词不区分大小写）".format(words, also, excl)
     print(render_direction("{}（{}）".format(r["name"], r["id"]), spec_text, r["rows"], r["diag"], r["samples"], source_note))
+    hits = phrase_hits_by_id.get(r["id"])
+    if hits:
+        print()
+        print("### 各关键词命中（{} 年，在上面命中的论文里）".format(r["rows"][-1]["year"]))
+        print("| 关键词 | 命中 | 只靠它命中 |")
+        print("|---|---|---|")
+        for label, hit, only in hits:
+            print("| `{}` | {} | {} |".format(label, hit, only))
+        print()
+        print("只靠某个词命中、样例又不对题的，就是该删的词。")
     return 0
 
 

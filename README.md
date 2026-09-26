@@ -67,6 +67,7 @@ python3 momentum-idea/scripts/iclr_momentum.py --list                 # 28 个�
 python3 momentum-idea/scripts/iclr_momentum.py --direction gnn        # 单个方向
 python3 momentum-idea/scripts/iclr_momentum.py --all                  # 全部方向扫描
 python3 momentum-idea/scripts/iclr_momentum.py --name "时间序列预测" --phrases "time series forecasting"
+python3 momentum-idea/scripts/iclr_momentum.py --direction gnn --and-phrases "large language model" LLM   # 交叉方向：GNN × LLM
 python3 momentum-idea/scripts/iclr_momentum.py --all --offline        # 不联网
 python3 momentum-idea/scripts/arxiv_momentum.py --direction gnn       # arXiv 近 12 个月势头
 ```

@@ -1,7 +1,7 @@
 {
  "version": "2026-09-26",
  "note": "28 个方向沿用《做科研越来越像炒股：4 万篇 ICLR 论文回测》（鸭基米德，PaperWeekly 转载）的划分。原文没有公开词表，这里是重建版，并用原文公布的数字校准，对照结果见 references/iclr-snapshot.md。",
- "match_rule": "匹配标题 + 摘要；含大写字母的词组（LLM、NeRF）按大小写精确匹配，全小写词组不区分大小写；词间空格和连字符等价；末尾自动兼容复数 s/es；命中 exclude 里的词就不算。",
+ "match_rule": "匹配标题 + 摘要；含大写字母的单词（LLM、AI、NeRF）按大小写精确匹配，其余单词不区分大小写；词间空格和连字符等价；末尾自动兼容复数 s/es；命中 exclude 里的词就不算。",
  "directions": [
   {"id": "llm", "name": "大语言模型 LLM", "aliases": ["大语言模型", "大模型", "语言模型", "llm", "large language model"],
    "phrases": ["large language model", "LLM"]},
