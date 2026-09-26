@@ -25,11 +25,11 @@ description: 用「科研 momentum」框架帮用户寻找合适的 AI/ML 科研
 
 "对你来说的难度"要用到 5 项信息：阶段、持有期、算力、相关经验、导师或合作者；找方向时再加兴趣方向。
 
-1. 先找现成的：Claude Code 里读 `~/.momentum-idea/profile.md`；claude.ai 里看对话、项目说明或记忆。用户这条消息里已经说了的也算。
+1. 先找现成的：Claude Code 里读 `~/.momentum-idea/profile.md`；claude.ai 里看对话、项目说明或记忆。用户这条消息里已经说了的也算，只说了一部分的也算（"做 NLP"算经验的一部分）；由某个会议截稿推出来的持有期，核对日期后也算已知。
 2. 缺的信息按问题分量处理：
    - **快问快答**：先给方向本身的结论，把缺的问题放在回复末尾一次问完。这一轮不要用默认值去编"对你来说"的等级。
    - **完整评估 / 找方向**：已知 ≥ 3 项就直接开始，缺的用默认值并标"（假设）"，结尾列出这些假设、请用户纠正；已知 < 3 项，先用一条消息把缺的问完（不追问），用户回答后再开始。
-   - 用户说"跳过"的项，以及上面允许用默认值的情况：本科生；持有期 6 个月；一张 24GB 消费级显卡；会 PyTorch、没有一作论文；没人带。
+   - 用户说"跳过"的项，以及上面允许用默认值的情况：本科生；持有期 6 个月；一张 24GB 消费级显卡；会 PyTorch、没有一作论文；没人带。用户提到了实验室或导师、但没说是不是这个方向时，⑨ 按"导师在相邻方向"（🟡）假设。
 3. 问题清单（只问缺的）：
    1. 阶段：本科 / 硕士 / 博士 / 工作，几年级？
    2. 持有期：离你最近的硬目标（投稿截止、毕业、复试、保研材料）还有多久？
@@ -38,7 +38,7 @@ description: 用「科研 momentum」框架帮用户寻找合适的 AI/ML 科研
    5. 导师或合作者：有没有人在这个方向带你？
    6. （仅找方向）感兴趣的领域或关键词
 4. **核对前提**：持有期如果是按某个会议截稿算的（"离 ICLR 截稿还有 8 个月"），先联网查这个截稿日期，并换算到用户的时区（北京时间 = AoE + 20 小时）。前提错了（比如截稿刚过），在回复开头指出来，再按正确的日期算 ⑧。
-5. Claude Code 里把答案写进 `~/.momentum-idea/profile.md`，下次直接用；用户说情况变了就更新：
+5. Claude Code 里把用户说过的信息写进 `~/.momentum-idea/profile.md`（默认值只写在报告里，不写进档案），下次直接用；用户说情况变了就更新：
 
 ```markdown
 # momentum-idea 个人档案（更新于 YYYY-MM-DD）
@@ -63,13 +63,13 @@ description: 用「科研 momentum」框架帮用户寻找合适的 AI/ML 科研
    python3 <SKILL_DIR>/scripts/iclr_momentum.py --direction gnn --and-phrases "large language model" LLM   # GNN × LLM
    ```
    检查输出末尾的命中样例：如果明显有误伤（比如 "agent" 匹配到强化学习里的 agent），加 `--phrase-hits` 看每个词各命中多少篇，删掉误伤多的词，或用 `--exclude` 排除后重跑。需要结构化结果时加 `--json`。
-   同时跑了几个层级（上一级方向、细分方向）时，报告里的 ①–④ 用最贴近用户 idea、且最新一年 ≥ 30 篇的那一层，其他层级放进报告的层级对比表。
+   同时跑了几个层级（上一级方向、细分方向）时，报告里的 ①–④ 用最贴近用户 idea、且最新一年 ≥ 30 篇的那一层；有两个上一级方向（比如方法所在的"大模型 Agent"和领域所在的"金融"）都够 30 篇时，用竞争最直接的那一层，通常是方法所在的方向。其他层级放进报告的层级对比表。
 3. **跑 arXiv 近期势头**：ICLR 一年才出一次结果，看不到最近半年。方向很新，或 ICLR 最新一年样本少时尤其要跑（约 1.5 分钟；同样支持 `--and-phrases`）：
    ```bash
    python3 <SKILL_DIR>/scripts/arxiv_momentum.py --direction gnn --months 12
    ```
    默认类目是 cs.LG / cs.AI / cs.CL / cs.CV。方向主要在别的类目时用 `--cats` 加上（机器人 cs.RO、检索 cs.IR、金融 q-fin.*、语音 eess.AS），否则"同类目总数"这个分母就不对。
-4. **⑤ 审稿门槛**：按 `references/difficulty-rubric.md` 第 3 节做 3–5 次针对性搜索，记下依据和链接。
+4. **⑤ 审稿门槛**：按 `references/difficulty-rubric.md` 第 3 节做 3–5 次针对性搜索，记下依据和链接。整个完整评估的搜索一般 5–10 次就够（⑤ 加上截稿日期和 CCF 核对），不要超过 15 次。
 5. **⑥–⑨ 对你来说**：对照个人档案，按 `references/difficulty-rubric.md` 第 4 节定等级。
 6. **总评、投稿档位、切入建议**：按 `references/difficulty-rubric.md` 第 5–7 节；联网核对最新的 CCF 目录和持有期内的截稿日期。
 7. **方向不好走时，用数据找出路**（见下一节），不要只说"别做"。
@@ -77,7 +77,7 @@ description: 用「科研 momentum」框架帮用户寻找合适的 AI/ML 科研
 
 ## 方向不好走时，用数据找出路
 
-方向是 🧱 📉 🥶，或者总评是 🔴 ⚫ 时：
+方向本身是 🧱 📉 🥶，或者方向本身的难度是 🔴 ⚫ 时（如果卡住的是 ⑧ 持有期，拆切口帮不上忙，改为比较换一个投稿时间点或档位的结果）：
 - **拆细分切口**：用 `--direction X --and-phrases …` 或 `--phrases … --and-phrases …` 跑 3–6 个子方向或交叉方向（比如 GNN × LLM、GNN 可解释性、图基础模型），找出没有折价的"口袋"。细分样本小，结论只作参考。
 - **排除换了叫法**：衰退的方向先用更宽的同义词表复查一次（比如 GNN 再加上 "graph learning""graph transformer"），排除"只是大家不再用这个词"。
 - **看相邻方向**：从 `--all` 的扫描结果里找标签更好的相邻方向。
@@ -90,7 +90,7 @@ description: 用「科研 momentum」框架帮用户寻找合适的 AI/ML 科研
    ```bash
    python3 <SKILL_DIR>/scripts/iclr_momentum.py --name "金融 × Agent" --phrases "financial market" "stock prediction" "portfolio optimization" "quantitative trading" --and-phrases "LLM agent" agentic "language agent"
    ```
-   领域词要用具体的词组：单个词（trading、stock）很容易误伤（比如 "trading off"），一定要看命中样例。
+   领域词要用具体的词组：单个词（finance、financial、trading、stock）很容易误伤（比如 "trading off"，或只是顺带提到金融的论文），一定要看命中样例，必要时加 `--phrase-hits`。
 4. 按持有期和处境标签筛选（规则见 `references/difficulty-rubric.md` 第 4 节 ⑧）：持有期短的优先 🌱 和 🔥 里的小切口，避开 🧱 🥶；🐢 📉 只在用户有明确优势时保留。再按兴趣和资源排序。
 5. 给每个候选一个粗略的两层难度：①–④ 用脚本结果，⑤ 每个候选找 1 条依据就够，⑥–⑨ 对照档案快速判断。这是初筛，完整的 ⑤ 留给用户选定之后的完整评估。
 6. 给出 5–8 个候选的对比表，前 3 名各用三句话说清楚，按模板 B 出报告；最后邀请用户挑一个做完整评估。候选用"方向 1、方向 2"编号，别和 ①–⑨ 混在一起。
