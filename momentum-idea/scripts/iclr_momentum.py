@@ -67,13 +67,14 @@ LABELS = {
     "warming_unclear": ("🌤️", "升温中·红利不明", "份额在涨，但方向还小、样本不够，录用红利看不清"),
     "premium_to_discount": ("📉", "红利变折价", "前几年做这个方向录用率更高，现在反而更低：论文翻倍，红利变成折价"),
     "discount": ("📉", "录用折价", "做这个方向的录用率显著低于同年其他论文：审稿人对它更挑剔"),
+    "premium_to_discount_trend": ("📉", "红利变折价（趋势）", "前几年点估计为正、现在转负，但区间跨零：只能算趋势，不是定论"),
     "growth_in_rejects": ("🧱", "增长落在拒稿", "论文数在涨，但新增的几乎都被拒了"),
     "lagging_market": ("🐢", "跑输大盘", "论文数还在涨，但涨得比大会慢、份额在缩（\"凉了\"最常见的一种）：你以为的冷门，其实人不少"),
     "shrinking": ("🥶", "真萎缩", "论文数真的在减少"),
     "steady": ("➖", "平稳", "没有明显的升温、退潮或红利信号"),
 }
 LABEL_PRIORITY = [
-    "shrinking", "growth_in_rejects", "premium_to_discount", "discount", "early_premium",
+    "shrinking", "growth_in_rejects", "premium_to_discount", "discount", "premium_to_discount_trend", "early_premium",
     "crowded_no_premium", "warming_unclear", "lagging_market", "steady",
 ]
 
@@ -320,7 +321,9 @@ def diagnose(rows, window=3, hot_cut=None, hot_cut_rel=None):
     # "升温"：份额年变化为正，且至少 +0.1 个百分点或份额相对涨 10%（排除 +0.01 这种噪声）
     warming = sd > 0 and (sd >= 0.001 or (prev_share > 0 and sd / prev_share >= 0.10))
     window_rows = [by_year[y] for y in range(base["year"], latest["year"]) if y in by_year]
-    past_premium = any(r["gap"] is not None and r["n"] >= 10 and r["gap"] >= 0.03 for r in window_rows)
+    # 过去有没有红利：显著（区间整体 > 0）和只看点估计（≥ +3 个百分点）分开记，避免把跨零的点估计说成红利
+    past_premium_sig = any(r["gap"] is not None and r["n"] >= 10 and r["ci_low"] > 0 for r in window_rows)
+    past_premium_point = any(r["gap"] is not None and r["n"] >= 10 and r["gap"] >= 0.03 for r in window_rows)
 
     labels = []
     if n0 > 0 and n1 < n0:
@@ -328,13 +331,13 @@ def diagnose(rows, window=3, hot_cut=None, hot_cut_rel=None):
     if d["delta_n"] >= 20 and d["growth_to_accept"] is not None and d["growth_to_accept"] < 0.10:
         labels.append("growth_in_rejects")
     if gap is not None and n1 >= 10:
-        if past_premium and (hi < 0 or gap <= -0.03):
-            labels.append("premium_to_discount")
-        elif hi < 0:
-            labels.append("discount")
+        if hi < 0:
+            labels.append("premium_to_discount" if past_premium_sig else "discount")
+        elif gap <= -0.03 and past_premium_point:
+            labels.append("premium_to_discount_trend")
     if gap is not None and warming and lo > 0:
         labels.append("early_premium")
-    if gap is not None and warming and lo <= 0 and not {"premium_to_discount", "discount"} & set(labels):
+    if gap is not None and warming and lo <= 0 and not {"premium_to_discount", "discount", "premium_to_discount_trend"} & set(labels):
         labels.append("crowded_no_premium" if latest["share"] >= 0.03 else "warming_unclear")
     lag_window = n0 > 0 and n1 > n0 and latest["share"] < base["share"]
     lag_recent = prev is not None and n1 > prev["n"] and sd <= -0.005
@@ -524,6 +527,8 @@ def render_direction(title, spec, rows, diag, samples, source_note, show_years=N
             verdict = "显著为正：选这个方向目前有录用红利"
         elif latest["ci_high"] < 0:
             verdict = "显著为负：做这个方向的录用率反而更低"
+        elif abs(latest["gap"]) >= 0.10:
+            verdict = "区间跨零：点估计 {} 看着很大，但不确定性高，只能当信号，不能当结论".format(pp(latest["gap"]))
         else:
             verdict = "区间跨零：和其他论文的录用率看不出差别"
         out.append("- {} 年相对录用率差 {}（{}, {}）→ {}".format(

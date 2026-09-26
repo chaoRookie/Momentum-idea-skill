@@ -212,11 +212,11 @@ def main(argv=None):
             print("❌ 方向「{}」匹配结果：{}。请写得更具体，或用 --phrases 自定义关键词。".format(args.direction, names), file=sys.stderr)
             return 2
         name, phrases = found[0]["name"], found[0]["phrases"]
-    if args.and_phrases:
-        name = args.name or " × ".join([name] + [" / ".join(g) for g in args.and_phrases])
     else:
         print("❌ 请指定 --direction 或 --phrases", file=sys.stderr)
         return 2
+    if args.and_phrases:
+        name = args.name or " × ".join([name] + [" / ".join(g) for g in args.and_phrases])
 
     today = date.today()
     if args.until:
