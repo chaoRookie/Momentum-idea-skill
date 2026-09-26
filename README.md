@@ -30,6 +30,10 @@
 
 ### Claude Code
 
+在这个仓库里打开 Claude Code 就能直接用：`.claude/skills/momentum-idea` 是指向 `momentum-idea/` 的链接，会自动加载（云端会话也一样）。
+
+想在所有项目里都能用，装到个人目录：
+
 ```bash
 git clone https://github.com/chaoRookie/Momentum-idea-skill.git
 mkdir -p ~/.claude/skills
